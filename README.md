@@ -1,95 +1,120 @@
-# Rollover Stability Control - Software Requirements Specification
+# Rollover Stability Control - Software Design Document
 
 **Version:** 1.1
 **Date:** 2025-04-03
 
 **1. Introduction**
 
-* **1.1 Purpose:** This document specifies the requirements for the Rollover Stability Control software module for an Articulated Dump Truck (ADT). This module calculates stability limits to mitigate rollover risk.
-* **1.2 Scope:** These requirements define the functionality, performance, interfaces, and constraints of the software module responsible for calculating the combined Center of Gravity (CG), lateral acceleration limit, and resultant speed limit. It defines *what* the software must do. Input acquisition and output usage details are treated as interface requirements.
-* **1.3 Definitions and Acronyms:**
-    * ADT: Articulated Dump Truck
-    * CG: Center of Gravity
-    * SDD: Software Design Document
-    * SRS: Software Requirements Specification
-    * FR: Functional Requirement
-    * NFR: Non-Functional Requirement
-    * ECU: Electronic Control Unit
-    * CAN: Controller Area Network
-    * m/s²: Meters per second squared
-    * kph: Kilometers per hour
-    * rad: Radians
-    * deg: Degrees
-    * mps: Meters per second
+* **1.1 Purpose:** This document describes the design of the software module responsible for calculating rollover stability limits for an Articulated Dump Truck (ADT). It details the architecture, algorithms, interfaces, and data structures used to determine the combined Center of Gravity (CG), maximum lateral acceleration limit, and resulting speed limit based on articulation.
+* **1.2 Scope:** This document covers the design of the calculation logic implemented in `rollover_stability.c`. It assumes inputs (ground roll, weights, articulation) are provided by external systems (sensors, CAN bus interface) and the output (speed limit) is consumed by another system (e.g., vehicle control unit). Input validation and sensor fusion are outside the scope of this specific calculation module's design details but are acknowledged as necessary interfaces.
+* **1.3 Definitions and Acronyms:** (Same as SRS Section 1.3)
 * **1.4 References:**
-    * `RolloverStability_SDD_v1.1.md`: Software Design Document detailing the implementation approach.
+    * `RolloverStability_SRS_v1.1.md`: Software Requirements Specification for this module.
     * `rollover_stability.c`: C source code implementation.
-    * ADT System Specification Document (Hypothetical): Document defining overall vehicle system requirements.
-    * ISO 26262 (Road vehicles – Functional safety) - *Relevant if developing to automotive safety standards*.
+    * Vehicle Dynamics Textbooks (e.g., Milliken & Milliken - Race Car Vehicle Dynamics, Gillespie - Fundamentals of Vehicle Dynamics) - *For underlying physics principles*.
+    * ADT Specific Datasheet - *Required for accurate machine parameters (`TRACK_WIDTH`, `UNLOADED_CG_HEIGHT`, etc.)*.
 
-**2. Overall Description**
+**2. System Overview**
 
-* **2.1 Product Perspective:** This software module is a component of the ADT's overall safety and control system, likely residing on an Electronic Control Unit (ECU). It receives vehicle state information and provides a calculated speed limit to potentially restrict the vehicle's maximum operating speed under certain conditions.
-* **2.2 Product Functions Summary:**
-    * Calculate the combined vertical CG of the ADT based on load.
-    * Determine the maximum lateral acceleration the vehicle can withstand given the current CG, track width, and ground roll angle.
-    * Calculate a recommended speed limit based on the lateral acceleration limit and the current articulation angle.
-    * Handle specific conditions like zero load and zero articulation.
-* **2.3 User Characteristics:** The end-users are the ADT operator (indirectly, through potentially limited speed) and service technicians (for diagnostics). The primary consumer of the output is another software module within the vehicle's control system.
-* **2.4 System Context Diagram (Mermaid):**
+* The Rollover Stability module is a computational component designed to run on an embedded ECU within the ADT. Its primary goal is to enhance safety by calculating a dynamic speed limit that mitigates the risk of rollover caused by excessive lateral acceleration, ground slope, and vehicle articulation. It receives real-time or near-real-time inputs, performs physics-based calculations, and outputs a recommended maximum speed.
+
+**3. Architectural Design**
+
+* **3.1 Overview:** The software follows a modular, functional design. It consists of helper functions for unit conversions and core calculation functions for CG, lateral acceleration limit, and speed limit.
+* **3.2 Components:**
+    * **Input Interface (Conceptual):** Receives `MachineInputs` data (assumed to be populated externally).
+    * **Unit Conversion:** Helper functions (`deg_to_rad`, `rad_to_deg`, `mps_to_kph`).
+    * **CG Calculation Module:** `calculate_combined_cg()` function.
+    * **Lateral Limit Calculation Module:** `calculate_lateral_accel_limit()` function.
+    * **Turn Radius Calculation Module:** `calculate_turn_radius()` function (helper for speed limit).
+    * **Speed Limit Calculation Module:** `calculate_speed_limit_mps()` function.
+    * **Output Interface (Conceptual):** Provides `StabilityLimits` data (specifically `speed_limit_kph` and potentially `lateral_accel_limit_mps2` or status flags) to other ECU components.
+* **3.3 Data Flow Diagram (Mermaid):**
 
     ```mermaid
     graph TD
-        subgraph "External Systems"
-            Sensors -->|Input Data (Roll, Load, Articulation)| RS_Module
-            ECU_Control[Vehicle Control ECU]
-            Operator([Operator]) -.-> |Indirectly Affected| ECU_Control
+        A[Input: MachineInputs<br>(roll_deg, weights_kg, articulation_deg)] --> B(Convert deg to rad);
+
+        subgraph "Calculations"
+           B --> C{calculate_combined_cg<br>FR-001, FR-005};
+           C -->|combined_cg_h| D{calculate_lateral_accel_limit<br>FR-002};
+           B -->|ground_roll_rad| D;
+           D -->|lat_accel_limit_mps2| E{calculate_speed_limit_mps<br>FR-003, FR-004};
+           B -->|articulation_rad| E;
+           E -- calls --> F[calculate_turn_radius];
+           B -->|articulation_rad| F;
         end
 
-        subgraph "Rollover Stability Module (RS_Module)"
-             direction LR
-             InputProcessing[Accept Inputs FR-006] --> CalculateCG[Calc CG FR-001, FR-005]
-             CalculateCG --> CalculateLatLimit[Calc Lat Accel Limit FR-002]
-             CalculateLatLimit --> CalculateSpeedLimit[Calc Speed Limit FR-003, FR-004]
-             CalculateSpeedLimit --> OutputProcessing[Provide Outputs FR-007]
-        end
+        E -->|speed_limit_mps| G(Convert mps to kph);
+        G -->|speed_limit_kph| H[Output: StabilityLimits<br>(speed_limit_kph, lat_accel_limit_mps2, statically_unstable)];
+        D -->|lat_accel_limit_mps2, unstable_flag| H;
+        C -->|combined_cg_h for info| H
 
-         OutputProcessing -->|Calculated Speed Limit, Status| ECU_Control
-
-    style Operator fill:#fff,stroke:#333,stroke-width:2px
-
+       style A fill:#lightgrey,stroke:#333,stroke-width:2px
+       style H fill:#lightgrey,stroke:#333,stroke-width:2px
     ```
 
-* **2.5 Constraints:**
-    * Must be implemented in C.
-    * Must run on the target ADT ECU (specific hardware constraints TBD).
-    * Must use provided machine parameters (Track Width, CG heights, etc.).
-    * Calculation latency must be low enough for real-time control (see NFR-001).
-* **2.6 Assumptions and Dependencies:**
-    * Accurate input values (ground roll, weights, articulation angle) are provided.
-    * Machine parameters configured in the software match the physical vehicle.
-    * The underlying physics models used in the design (see SDD Section 8) are adequate.
+**4. Detailed Design**
 
-**3. Specific Requirements**
+* **4.1 `calculate_combined_cg` (`rollover_stability.c`)**
+    * **Functionality:** Calculates the weighted average vertical height of the combined machine and load CG.
+    * **Algorithm:** `h_cg_combined = (W_machine * h_chassis + W_load * h_load) / (W_machine + W_load)`.
+    * **Inputs:** `unloaded_weight` (kg), `load_weight` (kg), `unloaded_cg_h` (m), `load_cg_h` (m).
+    * **Outputs:** Combined CG height (m).
+    * **Error Handling:** Returns `unloaded_cg_h` if `load_weight` <= 0 or `unloaded_weight` <= 0.
+    * **Traceability:** FR-001, FR-005.
+* **4.2 `calculate_lateral_accel_limit` (`rollover_stability.c`)**
+    * **Functionality:** Calculates the maximum lateral acceleration based on moment balance around the low-side wheel contact point.
+    * **Algorithm:** `a_lat_limit = g * [ (cos(roll) * track_width / (2 * h_cg)) - sin(roll) ]`. Includes check for static instability (`tan(roll) * h_cg >= track_width / 2` or if the formula yields < 0).
+    * **Inputs:** `combined_cg_h` (m), `ground_roll_rad` (rad), `track_width` (m).
+    * **Outputs:** Lateral acceleration limit (m/s²). Returns -1.0 to indicate static instability.
+    * **Error Handling:** Returns 0.0 if `combined_cg_h` or `track_width` are non-positive or near zero. Explicitly checks for and flags static instability.
+    * **Traceability:** FR-002.
+* **4.3 `calculate_turn_radius` (`rollover_stability.c`)**
+    * **Functionality:** Provides a simplified estimation of the turn radius.
+    * **Algorithm:** `R = L / tan(articulation_rad)`.
+    * **Inputs:** `articulation_rad` (rad), `characteristic_length` (m).
+    * **Outputs:** Turn radius (m).
+    * **Error Handling:** Returns `INFINITY` if `articulation_rad` is near zero or `characteristic_length` is non-positive.
+    * **Traceability:** Supports FR-003, FR-004.
+* **4.4 `calculate_speed_limit_mps` (`rollover_stability.c`)**
+    * **Functionality:** Calculates the maximum permissible speed based on the lateral acceleration limit and turn radius.
+    * **Algorithm:** `v_limit = sqrt(a_lat_limit * R)`. Uses `calculate_turn_radius`.
+    * **Inputs:** `lat_accel_limit` (m/s²), `articulation_rad` (rad), `characteristic_length` (m).
+    * **Outputs:** Speed limit (m/s).
+    * **Error Handling:** Returns 0.0 if `lat_accel_limit` is non-positive. Returns a high speed (capped later) if turn radius is infinite (straight driving).
+    * **Traceability:** FR-003, FR-004.
+* **4.5 `main` Function (`rollover_stability.c`)**
+    * **Functionality:** Orchestrates the calculation flow, acquires example inputs, calls calculation functions, performs final checks (static instability override, max speed cap), and prints results.
+    * **Traceability:** Demonstrates FR-006 (input usage), FR-007 (output formatting).
 
-* **3.1 Functional Requirements (FR):**
-    * **FR-001:** The software **shall** calculate the combined vertical Center of Gravity (CG) height of the loaded machine. It shall use the unloaded machine weight, load weight, unloaded machine CG height, and the load's CG height as inputs. The calculation shall be based on a weighted average. *(Ref: SDD 4.1, `calculate_combined_cg`)*
-    * **FR-002:** The software **shall** calculate the maximum allowable lateral acceleration limit in m/s². This calculation shall use the combined CG height, ground roll angle, vehicle track width, and the acceleration due to gravity (9.81 m/s²). The calculation shall account for moments tending to cause rollover versus stabilizing moments. The software shall detect and flag conditions of static instability (rollover risk even with zero lateral acceleration). *(Ref: SDD 4.2, `calculate_lateral_accel_limit`)*
-    * **FR-003:** The software **shall** calculate a recommended maximum speed limit in kph. This calculation shall use the calculated lateral acceleration limit and the current articulation angle. The calculation shall relate lateral acceleration to speed and turn radius (`a = v^2/R`), using a simplified model for turn radius based on articulation angle and a characteristic vehicle length. *(Ref: SDD 4.4, `calculate_speed_limit_mps`)*
-    * **FR-004:** The software **shall** handle a zero (or near-zero) articulation angle. In this condition (driving straight), the speed limit calculation shall not be constrained by turning dynamics, although the limit determined by ground roll (FR-002) must still be respected. *(Ref: SDD 4.3, SDD 4.4, `calculate_turn_radius`, `calculate_speed_limit_mps`)*
-    * **FR-005:** The software **shall** handle a zero (or near-zero) load weight. In this condition, the combined CG calculation (FR-001) shall result in the unloaded machine's CG height. *(Ref: SDD 4.1, `calculate_combined_cg`)*
-    * **FR-006:** The software **shall** accept the following inputs:
-        * Ground roll angle (degrees)
-        * Unloaded machine weight (kg)
-        * Load weight in bin (kg)
-        * Articulation angle (degrees) *(Ref: SDD 5.2, `MachineInputs` struct)*
-    * **FR-007:** The software **shall** output the calculated speed limit (kph). It may also output the calculated lateral acceleration limit (m/s²) and a static instability status flag for diagnostic or informational purposes. *(Ref: SDD 5.2, `StabilityLimits` struct)*
-* **3.2 Non-Functional Requirements (NFR):**
-    * **NFR-001 (Performance):** The entire calculation cycle (from input reception to speed limit output) **shall** complete within 50 milliseconds [Value TBD based on system needs].
-    * **NFR-002 (Reliability):** The software **shall** handle potential floating-point exceptions (e.g., division by zero) gracefully, returning safe/default values (e.g., zero speed limit) where appropriate. *(Partially addressed in SDD error handling)*
-    * **NFR-003 (Safety):** The software is considered safety-related. Development practices should align with relevant standards (e.g., MISRA C, potentially ISO 26262 ASIL level TBD). Output values must be conservative in cases of uncertainty or error.
-    * **NFR-004 (Maintainability):** The code **shall** be well-commented, adhering to defined coding standards. Constants representing machine parameters shall be clearly defined and easily configurable. *(Partially addressed in code comments, SDD references)*
-    * **NFR-005 (Portability):** The code **shall** be written in standard C (e.g., C99 or C11) with minimal platform-specific dependencies, primarily relying on `math.h`.
-* **3.3 Interface Requirements:**
-    * **IF-001:** The software module **shall** receive input data (FR-006) through defined function calls or a shared memory interface as specified by the overall ECU architecture. Data types and units shall match FR-006.
-    * **IF-002:** The software module **shall** provide output data (FR-007) through defined function return values, shared memory, or CAN messages as specified by the overall ECU architecture. Data types and units shall match FR-007.
+**5. Interface Design**
+
+* **5.1 Internal Interfaces:** Functions call each other as described in Section 4. Data is passed via function arguments and return values.
+* **5.2 External Interfaces (Conceptual):**
+    * **Input:** The module expects a structure `MachineInputs` populated with values in specified units (degrees, kg). Source: Sensor fusion module / CAN interface.
+    * **Output:** The module produces a structure `StabilityLimits`. The primary output `speed_limit_kph` is intended for consumption by a vehicle speed control system. `lateral_accel_limit_mps2` and `statically_unstable` flag may be used for diagnostics or driver information. Destination: Vehicle Control Unit / Display Module via ECU internal communication or CAN.
+
+**6. Data Design**
+
+* **6.1 `MachineInputs` Struct:** Contains input parameters (double precision). See `rollover_stability.c`.
+* **6.2 `StabilityLimits` Struct:** Contains calculated output values (double precision) and status flag (boolean). See `rollover_stability.c`.
+* **6.3 Constants:** Defined using `#define` for physical constants (`GRAVITY`, `PI`) and machine parameters (`TRACK_WIDTH`, etc.). Machine parameters *must* be configured accurately.
+
+**7. Requirements Traceability**
+
+* See `Traceability:` entries in Section 4 and `ref` tags in `rollover_stability.c` comments. The diagrams in SRS 2.4 and SDD 3.3 also visually link requirements to components/flows. A separate traceability matrix is recommended for larger projects.
+
+**8. Assumptions and Dependencies**
+
+* **Assumptions:**
+    * Physics models (CG averaging, moment balance, turn radius) are sufficiently accurate for this safety application.
+    * Input data (weights, angles) is accurate and provided in real-time or near real-time.
+    * Machine parameters (`TRACK_WIDTH`, `UNLOADED_CG_HEIGHT`, `LOAD_BIN_CG_HEIGHT`, `CHARACTERISTIC_LENGTH_L`) are correctly defined for the specific ADT model.
+    * Load CG height (`LOAD_BIN_CG_HEIGHT`) is a reasonable estimate; actual height can vary.
+    * Tire deformation and suspension dynamics are neglected in this simplified model.
+* **Dependencies:**
+    * Requires accurate sensor inputs (inclinometer, load cells, articulation sensor).
+    * Depends on correctly defined machine parameters.
+    * Requires `math.h` library functions.
+    * Target platform: Embedded controller capable of running compiled C code with floating-point arithmetic.
