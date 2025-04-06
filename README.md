@@ -32,26 +32,13 @@
 * **3.3 Data Flow Diagram (Mermaid):**
 
     ```mermaid
-    graph TD
-        A[Input: MachineInputs<br>(roll_deg, weights_kg, articulation_deg)] --> B(Convert deg to rad);
-
-        subgraph "Calculations"
-           B --> C{calculate_combined_cg<br>FR-001, FR-005};
-           C -->|combined_cg_h| D{calculate_lateral_accel_limit<br>FR-002};
-           B -->|ground_roll_rad| D;
-           D -->|lat_accel_limit_mps2| E{calculate_speed_limit_mps<br>FR-003, FR-004};
-           B -->|articulation_rad| E;
-           E -- calls --> F[calculate_turn_radius];
-           B -->|articulation_rad| F;
-        end
-
-        E -->|speed_limit_mps| G(Convert mps to kph);
-        G -->|speed_limit_kph| H[Output: StabilityLimits<br>(speed_limit_kph, lat_accel_limit_mps2, statically_unstable)];
-        D -->|lat_accel_limit_mps2, unstable_flag| H;
-        C -->|combined_cg_h for info| H
-
-       style A fill:#lightgrey,stroke:#333,stroke-width:2px
-       style H fill:#lightgrey,stroke:#333,stroke-width:2px
+flowchart TD
+    A[Christmas] -->|Get money| B(Go shopping)
+    B --> C{Let me think}
+    C -->|One| D[Laptop]
+    C -->|Two| E[iPhone]
+    C -->|Three| F[fa:fa-car Car]
+  
     ```
 
 **4. Detailed Design**
